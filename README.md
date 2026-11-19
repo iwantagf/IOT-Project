@@ -22,7 +22,7 @@
 ### Giai đoạn 1: Khởi động & Kiểm tra phần cứng nền tảng
 - [x] **Hoàn tất kiểm tra ESP32 & LED:** Xác nhận build/flash thành công trên môi trường phát triển và điều khiển được các bóng LED tín hiệu.
 - [ ] **Chốt sơ đồ chân (Pinout) toàn hệ thống:** Lập bảng phân công chân GPIO cho RFID RC522 (SPI), Servo, cảm biến IR/siêu âm, màn hình I2C; tránh các chân strapping nhạy cảm và nhóm chân nối Flash nội (`D6–D11`).
-- [ ] **Kiểm tra & đọc UID thẻ RFID RC522:** Đấu nối RC522 với ESP32 qua chuẩn SPI, test đọc mã UID của từng thẻ/móc khóa RFID và in ra log kiểm tra.
+- [x] **Kiểm tra & đọc UID thẻ RFID RC522:** Đấu nối RC522 với ESP32 qua chuẩn SPI, test đọc mã UID của từng thẻ/móc khóa RFID và in ra log kiểm tra.
 
 ### Giai đoạn 2: Điều khiển thanh chắn & Cảm biến làn xe
 - [ ] **Lắp ráp cơ cấu thanh chắn Servo:** Gắn thanh chắn vào trục servo, căn chỉnh góc quay mở (ví dụ `90°`) và góc đóng (`0°`) đảm bảo không bị kẹt cơ khí.

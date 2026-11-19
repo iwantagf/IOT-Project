@@ -170,3 +170,236 @@ esp_err_t RC522::clear_bit_mask(uint8_t addr, uint8_t mask) {
 esp_err_t RC522::read_version(uint8_t *out_version) {
     return read_reg(REG_VERSION, out_version);
 }
+
+esp_err_t RC522::transceive(const uint8_t* send_data, size_t send_len, uint8_t* recv_data, size_t* recv_len, uint8_t* out_valid_bits) {
+    if (spi_ == nullptr) {
+        std::cout << "SPI is not NULL\n";
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (send_data == nullptr || send_len == 0 || send_len > 64) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = write_reg(REG_COMMAND, CMD_IDLE);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = write_reg(REG_COM_IRQ, 0x7F);
+    
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = set_bit_mask(REG_FIFO_LEVEL, 0x80);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    for (size_t i = 0; i < send_len; ++i) {
+        err = write_reg(REG_FIFO_DATA, send_data[i]);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    err = write_reg(REG_COMMAND, CMD_TRANSCEIVE);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = set_bit_mask(REG_BIT_FRAMING, 0x80);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    constexpr uint32_t TIMEOUT_US = 25000;
+    const uint32_t start_us = esp_timer_get_time();
+    uint8_t irq = 0;
+
+    while (true) {
+        err = read_reg(REG_COM_IRQ, &irq);
+
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (irq & 0x30) {
+            break;
+        }
+
+        if ((esp_timer_get_time() - start_us) >= TIMEOUT_US) {
+            clear_bit_mask(REG_BIT_FRAMING, 0x80);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        vTaskDelay(1);
+    }
+
+    clear_bit_mask(REG_BIT_FRAMING, 0x80);
+
+    uint8_t error_reg = 0;
+    err = read_reg(REG_ERROR, &error_reg);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (error_reg & 0x1B) {
+        return ESP_FAIL;
+    }
+
+    if (recv_data != nullptr && recv_len != nullptr) {
+        uint8_t fifo_len = 0;
+        err = read_reg(REG_FIFO_LEVEL, &fifo_len);
+
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (fifo_len > *recv_len) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        for (uint8_t i = 0; i < fifo_len; ++i) {
+            err = read_reg(REG_FIFO_DATA, &recv_data[i]);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+
+        *recv_len = fifo_len;
+
+        if (out_valid_bits != nullptr) {
+            uint8_t ctrl = 0;
+            err = read_reg(REG_CONTROL, &ctrl);
+            if (err != ESP_OK) {
+                return err;
+            }
+            *out_valid_bits = static_cast<uint8_t>(ctrl & 0x07);
+        }
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t RC522::request(uint8_t req_mode, std::array<uint8_t, 2>& out_atqa) {
+    esp_err_t err = write_reg(REG_BIT_FRAMING, 0x07);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t recv_data[2]{};
+    size_t recv_len = sizeof(recv_data);
+    uint8_t valid_bits;
+    err = transceive(&req_mode, 1, recv_data, &recv_len, &valid_bits);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (recv_len == 0) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (recv_len != 2 || valid_bits != 0) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    out_atqa[0] = recv_data[0];
+    out_atqa[1] = recv_data[1];
+
+    return ESP_OK;
+}
+
+esp_err_t RC522::anticoll(std::array<uint8_t, 4>& out_uid) {
+    esp_err_t err = write_reg(REG_BIT_FRAMING, 0x00);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t send_data[2] = {PICC_ANTICOLL, 0x20};
+
+    uint8_t recv_data[5]{};
+    size_t recv_len = sizeof(recv_data);
+    uint8_t valid_bits;
+
+    err = transceive(send_data, 2, recv_data, &recv_len, &valid_bits);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (recv_len != 5 || valid_bits != 0) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((recv_data[0] ^ recv_data[1] ^ recv_data[2] ^ recv_data[3]) != recv_data[4]) {
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        out_uid[i] = recv_data[i];
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t RC522::read_uid(std::array<uint8_t, 4>& out_uid) {
+    out_uid.fill(0);
+    
+    std::array<uint8_t, 2> atqa{};
+    esp_err_t err = request(PICC_REQIDL, atqa);
+
+    if (err == ESP_ERR_TIMEOUT) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return anticoll(out_uid);
+}
+
+RC522::~RC522() {
+    deinit(false);
+}
+
+esp_err_t RC522::deinit(bool free_bus) {
+    if (spi_ == nullptr) {
+        return ESP_OK;
+    }
+
+    esp_err_t first_err = ESP_OK;
+
+    esp_err_t err = antenna_off();
+    if (err != ESP_OK && first_err == ESP_OK) {
+        first_err = err;
+    }
+
+    err = gpio_set_level(PIN_RST, 0);
+    if (err != ESP_OK && first_err == ESP_OK) {
+        first_err = err;
+    }
+
+    err = spi_bus_remove_device(spi_);
+    spi_ = nullptr;
+    if (err != ESP_OK && first_err == ESP_OK) {
+        first_err = err;
+    }
+
+    if (free_bus) {
+        err = spi_bus_free(host_);
+        if (err != ESP_OK && first_err == ESP_OK) {
+            first_err = err;
+        }
+    }
+
+    return first_err;
+}
