@@ -11,7 +11,7 @@
 #include "esp_timer.h"
 #include <optional>
 //PIN in RC522
-constexpr gpio_num_t PIN_RST  = GPIO_NUM_22;
+constexpr gpio_num_t PIN_RST  = GPIO_NUM_17;
 constexpr gpio_num_t PIN_MOSI = GPIO_NUM_23;
 constexpr gpio_num_t PIN_MISO = GPIO_NUM_19;
 constexpr gpio_num_t PIN_SCK  = GPIO_NUM_18;
